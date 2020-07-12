@@ -16,26 +16,22 @@ namespace ILProtectorUnpacker
         private static Assembly Assembly { get; set; }
         private static TypeDef GlobalType { get; set; }
 
-        private static readonly List<object> JunkType = new List<object>();
+        private static readonly List<object> JunkTypes = new List<object>();
 
         public static void Main(string[] args)
         {
-            if (args.Length < 1)
-            {
-                return;
-            }
-
-            var filePath = Path.GetFullPath(args[0]);
-
-            if (!File.Exists(filePath))
-            {
-                return;
-            }
-
-            filePath = args[0];
+            if (args.Length < 1) return;
 
             try
             {
+                var filePath = Path.GetFullPath(args[0]);
+
+                if (!File.Exists(filePath)) return;
+
+                filePath = args[0];
+
+                AppDomain.CurrentDomain.AssemblyResolve += (sender, e) => Assembly.LoadFile(Path.Combine(Path.GetDirectoryName(filePath), e.Name.Split(',').FirstOrDefault() + ".dll"));
+
                 Module = ModuleDefMD.Load(filePath);
                 Assembly = Assembly.LoadFrom(filePath);
 
@@ -113,12 +109,12 @@ namespace ILProtectorUnpacker
                     }
                 }
 
-                JunkType.Add(invokeField);
-                JunkType.Add(stringField);
+                JunkTypes.Add(invokeField);
+                JunkTypes.Add(stringField);
 
                 var methods = GlobalType.Methods.Where(x => x.IsPrivate && x.IsStatic && x.Name.Length == 1).ToList();
 
-                JunkType.AddRange(methods);
+                JunkTypes.AddRange(methods);
 
                 CleanCctor();
 
@@ -139,8 +135,7 @@ namespace ILProtectorUnpacker
 
         private static void DecryptMethods(MethodDef methodDef, MethodBase invokeMethod, object fieldInstance)
         {
-            if (!methodDef.HasBody)
-                return;
+            if (!methodDef.HasBody) return;
 
             var instructions = methodDef.Body.Instructions;
 
@@ -149,16 +144,16 @@ namespace ILProtectorUnpacker
                 instructions[0].Operand.ToString().Contains("Invoke") &&
                 instructions[1].IsLdcI4())
             {
-                var mdToken = ((IType)methodDef.Body.Instructions[3].Operand).MDToken.ToInt32();
-                JunkType.Add(methodDef.DeclaringType.NestedTypes.FirstOrDefault(net => net.MDToken.ToInt32() == mdToken));
-
-                Hooks.MethodBase = Assembly.ManifestModule.ResolveMethod(methodDef.MDToken.ToInt32());
-
-                var index = instructions[1].GetLdcI4Value();
-                var method = invokeMethod.Invoke(fieldInstance, new object[] { index });
-
                 try
                 {
+                    var mdToken = ((IType)methodDef.Body.Instructions[3].Operand).MDToken.ToInt32();
+                    JunkTypes.Add(methodDef.DeclaringType.NestedTypes.FirstOrDefault(net => net.MDToken.ToInt32() == mdToken));
+
+                    Hooks.MethodBase = Assembly.ManifestModule.ResolveMethod(methodDef.MDToken.ToInt32());
+
+                    var index = instructions[1].GetLdcI4Value();
+                    var method = invokeMethod.Invoke(fieldInstance, new object[] { index });
+
                     var reader = new DynamicMethodBodyReader(Module, method);
                     reader.Read();
 
@@ -167,32 +162,31 @@ namespace ILProtectorUnpacker
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"Error: {ex.Message}{Environment.NewLine}Method: {methodDef.FullName}{Environment.NewLine}MDToken:{methodDef.MDToken}{Environment.NewLine}");
+                    Console.WriteLine($"Error: {ex.Message}{Environment.NewLine}Method: {methodDef.FullName}{Environment.NewLine}MDToken: 0x{methodDef.MDToken}{Environment.NewLine}");
                 }
             }
         }
 
         private static void DecryptStrings(MethodDef methodDef, MethodBase invokeMethod, object fieldInstance)
         {
-            if (methodDef.HasBody)
+            if (!methodDef.HasBody) return;
+
+            var instructions = methodDef.Body.Instructions;
+
+            for (var i = 0; i < instructions.Count; i++)
             {
-                var instructions = methodDef.Body.Instructions;
+                var instruction = instructions[i];
 
-                for (var i = 0; i < instructions.Count; i++)
+                if (instruction.OpCode == OpCodes.Ldsfld &&
+                    instruction.Operand.ToString().Contains("<Module>::String") &&
+                    instructions[i + 1].IsLdcI4() && instructions[i + 2].OpCode == OpCodes.Callvirt &&
+                    instructions[i + 2].Operand.ToString().Contains("Invoke"))
                 {
-                    var instruction = instructions[i];
-
-                    if (instruction.OpCode == OpCodes.Ldsfld &&
-                        instruction.Operand.ToString().Contains("<Module>::String") &&
-                        instructions[i + 1].IsLdcI4() && instructions[i + 2].OpCode == OpCodes.Callvirt &&
-                        instructions[i + 2].Operand.ToString().Contains("Invoke"))
-                    {
-                        var index = (int)instructions[i + 1].Operand;
-                        instructions[i].OpCode = OpCodes.Ldstr;
-                        instructions[i].Operand = invokeMethod.Invoke(fieldInstance, new object[] { index });
-                        instructions[i + 1].OpCode = OpCodes.Nop;
-                        instructions[i + 2].OpCode = OpCodes.Nop;
-                    }
+                    var index = (int)instructions[i + 1].Operand;
+                    instructions[i].OpCode = OpCodes.Ldstr;
+                    instructions[i].Operand = invokeMethod.Invoke(fieldInstance, new object[] { index });
+                    instructions[i + 1].OpCode = OpCodes.Nop;
+                    instructions[i + 2].OpCode = OpCodes.Nop;
                 }
             }
         }
@@ -218,7 +212,7 @@ namespace ILProtectorUnpacker
 
                 if (methodDef.Body.Instructions.Count == 1)
                 {
-                    JunkType.Add(methodDef);
+                    JunkTypes.Add(methodDef);
                 }
             }
 
@@ -230,7 +224,7 @@ namespace ILProtectorUnpacker
 
         private static void RemoveJunkTypes()
         {
-            foreach (var typeDef in JunkType)
+            foreach (var typeDef in JunkTypes)
             {
                 switch (typeDef)
                 {
@@ -271,7 +265,7 @@ namespace ILProtectorUnpacker
             {
                 Module.Write(path, new ModuleWriterOptions(Module)
                 {
-                    MetadataOptions = { Flags = MetadataFlags.PreserveAll | MetadataFlags.KeepOldMaxStack },
+                    MetadataOptions = { Flags = MetadataFlags.KeepOldMaxStack },
                     Logger = DummyLogger.NoThrowInstance
                 });
             }
@@ -279,7 +273,7 @@ namespace ILProtectorUnpacker
             {
                 Module.NativeWrite(path, new NativeModuleWriterOptions(Module, false)
                 {
-                    MetadataOptions = { Flags = MetadataFlags.PreserveAll | MetadataFlags.KeepOldMaxStack },
+                    MetadataOptions = { Flags = MetadataFlags.KeepOldMaxStack },
                     Logger = DummyLogger.NoThrowInstance
                 });
             }
