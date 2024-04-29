@@ -5,7 +5,7 @@
     <TargetFramework>net45</TargetFramework>
     <PlatformTarget>x86</PlatformTarget>
     <LangVersion>latest</LangVersion>
-    <Version>1.2</Version>
+    <Version>1.3</Version>
     <RootNamespace>ILProtectorUnpacker_x86</RootNamespace>
     <AssemblyName>ILProtectorUnpacker-x86</AssemblyName>
     <BaseOutputPath>..\ILProtectorUnpacker\bin</BaseOutputPath>
