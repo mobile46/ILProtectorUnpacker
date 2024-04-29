@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace ILProtectorUnpacker {
 	public class Program {
@@ -71,6 +72,8 @@ namespace ILProtectorUnpacker {
 					Console.WriteLine();
 				}
 
+				LoadNativeLibrary(dirPath);
+
 				RuntimeHelpers.RunModuleConstructor(Assembly.ManifestModule.ModuleHandle);
 
 				GlobalType = Module.GlobalType;
@@ -131,6 +134,19 @@ namespace ILProtectorUnpacker {
 
 			Console.WriteLine("Press any key to exit...");
 			Console.ReadKey();
+		}
+
+		[DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+		static extern IntPtr LoadLibrary(string lpFileName);
+
+		static void LoadNativeLibrary(string path) {
+			var files = Directory.GetFiles(path, "Protect*.dll");
+			foreach (var file in files) {
+				var handle = LoadLibrary(file);
+				if (handle != IntPtr.Zero) {
+					break;
+				}
+			}
 		}
 
 		static void DecryptMethods(MethodDef methodDef, MethodBase invokeMethod, object fieldInstance) {
